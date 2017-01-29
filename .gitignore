@@ -1,0 +1,4 @@
+*.swp
+*.un~
+_site/
+.jekyll-metadata

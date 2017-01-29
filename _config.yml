@@ -1,0 +1,21 @@
+# Dependencies
+markdown:         kramdown
+highlighter:      rouge
+
+# Permalinks
+permalink:        pretty
+
+# Setup
+title:            Git Dot
+tagline:          'Dotfiles with Git and Encryption'
+description:      'A dotfiles Git repository with encryption for sensitive files.<br>Made by <a href="https://johnlane.ie">John Lane</a> with thanks to <a href="https://www.agwa.name/projects/git-crypt">git-crypt</a>.'
+url:              http://git-dot.johnlane.ie
+baseurl:          /
+
+author:
+  name:           'John Lane'
+  url:            http://johnlane.ie
+
+# Custom vars
+github:
+  repo:           https://github.com/johnlane/git-dot
