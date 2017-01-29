@@ -1,0 +1,237 @@
+#!/bin/bash
+# /usr/bin/git-dot                                    JL 20170124
+# This file is part of git-dot, which requires git and git-crypt.
+
+license() { cat <<EOF
+
+This work, git-dot, is copyright 2017 John Lane (https://git-dot.johnlane.ie).
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>
+
+EOF
+}
+
+
+warn()  { echo "$(basename $0):" "$@"; }
+error() { warn "$@"; exit 1; }
+
+GIT_DIR="$HOME/.git-dot" # Not .git !!!
+
+tracked_files() {
+  git ls-tree -r master --name-only
+}
+
+encrypted_files() {
+  git crypt status | grep -v '^not' | awk '{print $2}'
+}
+
+plaintext_files() {
+  git crypt status | grep '^not' | awk '{print $3}'
+}
+
+# Kludge until proper support is provided
+is_locked() {
+  if is_repo
+  then
+    grep -qsPa "\x00GITCRYPT"  $(encrypted_files)
+  else
+    error "'locked' is not valid here"
+  fi
+}
+
+is_repo() {
+  git rev-parse --is-inside-work-tree &>/dev/null
+}
+
+can_run() { [[ ' init clone rev-parse ' =~ " $1 " ]] || is_repo; }
+
+git() {
+  if can_run $1
+  then
+    #echo >&2 git --git-dir="$GIT_DIR" --work-tree="$HOME" "$@"
+    command git --git-dir="$GIT_DIR" --work-tree="$HOME" "$@"
+  else
+    error "'$1' is not valid here."
+  fi
+}
+
+write_exclude() {
+  cat <<-EOF > "$GIT_DIR/info/exclude"
+	*
+	!.*
+	!.*/**
+	*.un~
+	*.*~
+	$(basename "$GIT_DIR")
+EOF
+}
+
+write_attributes() {
+  echo '.gitattributes !filter !diff' > "$HOME/.gitattributes"
+}
+
+init() {
+  (( $# == 0 )) || error "'$*' is not valid here."
+  is_repo && error "'$HOME' is already managed."
+  git init && git crypt init && write_exclude && write_attributes
+}
+
+encrypt() {
+  for path in "$@"
+  do
+
+    # format wildcards as required by .gitattributes
+    if [[ -d "$path" ]]
+    then
+      wildcard='/*'
+    elif [[ $(basename "$path") =~ \*\.* ]] 
+    then
+      wildcard="/$(basename "$path")"
+      path="$(dirname "$path")"
+    fi
+
+    # add entry to .gitattributes if not already present
+    if [[ -e "$path" ]]
+    then
+      path+="$wildcard" # if any
+      if ! grep -qs "^${path//\*/\\*} " .gitattributes # escape '*' for regex!
+      then
+        echo "$path filter=git-crypt diff=git-crypt" >> "$HOME/.gitattributes" &&
+	added+=("$path")
+      fi
+    else
+      warn "'$path' not found."
+    fi
+  done
+
+  # Commit .gitattributes if changed
+  if (( ${#added[@]} > 0 ))
+  then
+    set -f # do not expand pathspecs in the commit message
+    msg=$(printf "Specify %d encrypted file%s\n%s\n" \
+	         ${#added[@]} \
+                 "$((( ${#added[@]} == 1 )) || printf s)" \
+		 "$(printf '  %s\n' "${added[@]}")" )
+    git add "$HOME/.gitattributes" &&
+    git commit -m "$msg" "$HOME/.gitattributes"
+    set +f
+  fi
+}
+
+clone() {
+  if (( $# > 1 ))
+  then
+    error "unexpected arguments: '$*'"
+  elif is_repo
+  then
+    error "'$HOME' is already managed."
+  else
+
+    git clone --bare "$1" "$GIT_DIR"
+    git config core.bare false
+    git config core.logallrefupdates true
+    git reset &> /dev/null
+
+    # Backup existing files that will be overwritten by checkout
+    backup=$(mktemp -p . -d git-dot-backup.XXXXXXXX.tmp)
+    tracked_files | xargs -I f cp -a --parents -l f "$backup" 2>/dev/null
+
+    git checkout .
+    git config remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
+    git config branch.master.remote origin
+    git config branch.master.merge refs/heads/master
+    git config filter.git-crypt.smudge '"git-crypt" smudge'
+    git config filter.git-crypt.clean '"git-crypt" clean'
+    git config diff.git-crypt.textconv '"git-crypt" diff'
+    write_exclude
+
+    # consume 'Unable to open key file' messages
+    # https://github.com/AGWA/git-crypt/issues/108
+    sleep 1 && git status &> /dev/null
+
+    #Move plaintext modified files back into working tree
+    comm -12 <(plaintext_files | sort -u) \
+             <(cd "$backup"; find  -type f -printf '%P\n' | sort -u)            \
+    | ( cd "$backup"; xargs -I {} sh -c 'cp -a --parents -l -f {} "$HOME"; rm {}')
+
+    #Report pre-exisiting but now encrypted files that were moved out of the way
+    if [[ -n "$(ls -A "$backup")" ]]
+    then
+      echo -e "\nThe following files are now encrypted:"
+      find "$backup" -type f -printf '%P\n'
+      echo "The original files have been moved to '$backup'."
+      echo "Unlock the encrypted files before moving them back."
+    else
+      rm -rf "$backup"
+    fi
+
+    # Report unclean working directory which will prevent unlocking
+    if ! git diff-index --quiet HEAD --
+    then
+      echo -e '\nYour working directory is unclean. Please stash changes before unlocking.'
+      echo '  (use "git dot stash" before and "git dot stash pop" after unlocking)'
+    fi
+  fi
+}
+
+protect() {
+  encrypted_files | xargs chmod go-rwx
+}
+
+help() { cat <<EOF
+
+Usage: git dot COMMAND [ARGS ...]
+
+Repository commands:
+  repo           Is there a dotfiles repo? Returns 'yes' or 'no'.
+  init           Initialise new dotfiles repo in "$HOME"
+                 using both 'git init' and 'git crypt init'.
+  clone          Clone dotfiles repo into "$HOME"
+  locked         Returns 'yes' if repo is locked, otherwise 'no'
+  lock           Locks repository - encrypts working copy files.
+  unlock         Unlock repository - decrypts working copy files.
+
+File commands:
+  encrypt FILE   Specifies that FILE should be encrypted.
+                 (FILE must be separately committed to repo)
+  protect        Set all encrypted file permissions to owner-only.
+  tracked        List all tracked files
+  encrypted      List all encrypted files
+  plaintext      List all plaintext files
+
+Other commands:
+  help           Display this message.
+  license        Display copyring and license notices.
+
+Any unrecognised commands are assumed to be git commands and are
+launched with git pointing at the dotfiles repo in "$HOME".
+
+Copyright (C) 2017 John Lane
+
+This program comes with ABSOLUTELY NO WARRANTY; For details type
+'git dot license'. This is free software, and you are welcome to
+redistribute it under certain conditions; type 'git dot license'
+for details.
+
+EOF
+}
+
+case ${cmd:=$1} in
+  locked|repo)                 is_$cmd && echo yes || echo no ;;
+  tracked|encrypted|plaintext) ${cmd}_files                   ;;
+  unlock)                      is_locked && git crypt "$@"    ;;
+  lock)                        is_locked || git crypt "$@"    ;;
+  init|clone|encrypt|protect|help|license) shift; $cmd "$@"   ;;
+  *)                            git "$@"
+esac
