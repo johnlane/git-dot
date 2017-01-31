@@ -151,6 +151,7 @@ clone() {
     git config remote.origin.fetch +refs/heads/*:refs/remotes/origin/*
     git config branch.master.remote origin
     git config branch.master.merge refs/heads/master
+    git update-ref refs/remotes/origin/master HEAD@{0}
     git config filter.git-crypt.smudge '"git-crypt" smudge'
     git config filter.git-crypt.clean '"git-crypt" clean'
     git config diff.git-crypt.textconv '"git-crypt" diff'
