@@ -144,20 +144,6 @@ repository:
 
     $ git dot protect
 
-#### Missing remote branch
-
-After using `git dot clone`, the output of `git dot status` may show:
-
-    Your branch is based on 'origin/master', but the upstream is gone.
-
-This means that the remote branch is configured but not fetched. To rectify:
-
-    $ git dot fetch origin
-
-which should result in `git dot status` reporting
-
-    Your branch is up-to-date with 'origin/master'
-
 ### Encrypting files
 
 To encrypt a file, first (*before committing the file*) tell `git dot` that
